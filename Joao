@@ -1,0 +1,193 @@
+import torch
+from torch.autograd import Variable
+#import memtorch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+#from memtorch.utils import LoadMNIST
+import numpy as np
+import matplotlib.pyplot as plt
+import torchvision
+
+def LoadMNIST(batch_size=32, validation=True, num_workers=1):
+    """Method to load the MNIST dataset.
+
+    Parameters
+    ----------
+    batch_size : int
+        Batch size.
+    validation : bool
+        Load the validation set (True).
+    num_workers : int
+        Number of workers to use.
+
+    Returns
+    -------
+    list of torch.utils.data
+        The train, validiation, and test loaders.
+    """
+    root = "data"
+    transform = transforms.Compose([transforms.ToTensor()])
+    full_train_set = torchvision.datasets.MNIST(
+        root=root, train=True, transform=transform, download=True
+    )
+    test_set = torchvision.datasets.MNIST(
+        root=root, train=False, transform=transform, download=True
+    )
+    if validation:
+        train_size = int(0.8 * len(full_train_set))
+        validation_size = len(full_train_set) - train_size
+        train_set, validation_set = torch.utils.data.random_split(
+            full_train_set, [train_size, validation_size]
+        )
+        train_loader = torch.utils.data.DataLoader(
+            train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        )
+        validation_loader = torch.utils.data.DataLoader(
+            validation_set, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        )
+    else:
+        train_loader = torch.utils.data.DataLoader(
+            full_train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        )
+        validation_loader = None
+
+    test_loader = torch.utils.data.DataLoader(
+        test_set, batch_size=int(batch_size / 2), shuffle=False, num_workers=num_workers
+    )
+    return train_loader, validation_loader, test_loader
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.fc1 = nn.Linear(28*28, 10)
+
+    def forward(self, x):
+        x = x.view(-1, 28*28)
+        x = self.fc1(x)
+        return x
+
+def test(model, test_loader):
+    correct = 0
+    for batch_idx, (data, target) in enumerate(test_loader):        
+        output = model(data.to(device))
+        pred = output.data.max(1)[1]
+        correct += pred.eq(target.to(device).data.view_as(pred)).cpu().sum()
+
+    return 100. * float(correct) / float(len(test_loader.dataset))
+
+device = 'cpu'
+epochs = 1
+learning_rate = 1e-1
+step_lr = 5
+batch_size = 256
+train_loader, validation_loader, test_loader = LoadMNIST(batch_size=batch_size, validation=False)
+model = Net().to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+best_accuracy = 0
+
+for epoch in range(0, epochs):
+    print('Epoch: [%d]\t\t' % (epoch + 1), end='')
+    if epoch % step_lr == 0:
+        learning_rate = learning_rate * 0.1
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = learning_rate
+
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        optimizer.zero_grad()
+        output = model(data.to(device))
+        loss = criterion(output, target.to(device))
+        loss.backward()
+        optimizer.step()
+
+    accuracy = test(model, test_loader)
+    print('%2.2f%%' % accuracy)
+    if accuracy > best_accuracy:
+        torch.save(model.state_dict(), 'trained_model.pt')
+        best_accuracy = accuracy
+
+def find_nearest_value(weights, stable_weights):
+    nearest_values = np.zeros_like(weights)
+    for i in range(weights.shape[0]):
+        for j in range(weights.shape[1]):
+            min_diff = np.inf
+            for k in range(stable_weights.shape[0]):
+                diff = abs(weights[i, j] - stable_weights[k])
+                if diff < min_diff:
+                    min_diff = diff
+                    nearest_val = stable_weights[k]
+            nearest_values[i, j] = nearest_val
+    return nearest_values
+
+# Const- att + No_DRIFT
+mu_d1=[0.0408922482187778,0.0486397259465766,0.0659011822935616,0.0873910306988032,0.12031171987342,0.179347901868409,0.370734877791567,0.980002642655943]
+mu_d1 = np.array(mu_d1)
+fc1_weights = model.fc1.weight.data.cpu().numpy()
+
+w_min_fc1, w_max_fc1 = fc1_weights.min(), fc1_weights.max()
+
+stable_weights_d1=w_min_fc1+mu_d1*(w_max_fc1-w_min_fc1)
+
+n_states = np.arange(2, 18, 2)
+
+fc1_nearest_values = find_nearest_value(fc1_weights, stable_weights_d1)
+model.fc1.weight.data = torch.Tensor(fc1_nearest_values).to(device)
+
+accuracy = test(model, test_loader)
+print('Accuracy: %2.2f%%' % accuracy)
+
+device = 'cpu' 
+epochs = 1
+learning_rate = 1e-1
+step_lr = 5
+batch_size = 256
+train_loader, validation_loader, test_loader = LoadMNIST(batch_size=batch_size, validation=False)
+model = Net().to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+best_accuracy = 0
+
+for epoch in range(0, epochs):
+    print('Epoch: [%d]\t\t' % (epoch + 1), end='')
+    if epoch % step_lr == 0:
+        learning_rate = learning_rate * 0.1
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = learning_rate
+
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        optimizer.zero_grad()
+        output = model(data.to(device))
+        loss = criterion(output, target.to(device))
+        loss.backward()
+        optimizer.step()
+
+    accuracy = test(model, test_loader)
+    print('%2.2f%%' % accuracy)
+    if accuracy > best_accuracy:
+        torch.save(model.state_dict(), 'trained_model.pt')
+        best_accuracy = accuracy
+
+# Const- att + DRIFT
+mu_d2=[0.00290018894456321,0.00579987438695429,0.0124871185313898,0.0211661731196688,0.0351172867682934,0.0618268318738881,0.15689536442912,0.507524252429167]
+#stable_weights_sigma_d2=[0.00119773088256169,0.00146230640474838,0.00240189995120909,0.00295921207758356,0.00553294617161122,0.0180128583290658,0.0400563282515534,0.0280814267250356]
+mu_d2=np.array(mu_d2)
+
+
+
+fc1_weights = model.fc1.weight.data.cpu().numpy()
+
+w_min_fc1, w_max_fc1 = fc1_weights.min(), fc1_weights.max()
+
+stable_weights_d2=w_min_fc1+mu_d2*(w_max_fc1-w_min_fc1)
+
+n_states = np.arange(2, 18, 2)
+
+fc1_nearest_values = find_nearest_value(fc1_weights, stable_weights_d2)
+model.fc1.weight.data = torch.Tensor(fc1_nearest_values).to(device)
+
+accuracy = test(model, test_loader)
+print('Accuracy: %2.2f%%' % accuracy)
+w_min_fc1, w_max_fc1
